@@ -19,7 +19,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8713347006:AAEDPUsTmPGs8EerMiexMmdlmHiS8mdMtvE")
+BOT_TOKEN = os.environ.get("BOT_TOKEN"")
 PORT = int(os.environ.get("PORT", 8080))
 
 app = Flask(__name__)
@@ -94,7 +94,7 @@ class UserData:
     usd_spent: float = 0.0
     purchased_cards: List[str] = field(default_factory=list)
     referrals_count: int = 0
-    referred_by: str = ""
+    referred_by: str = ""  # Stores referrer's user_id as string
     referral_link: str = ""
     pending_deposit: Optional[Dict] = None
 
@@ -279,16 +279,21 @@ class UserManager:
         self.users: Dict[int, UserData] = {}
         self.order_counter = 20990
 
-    def get_or_create_user(self, update: Update) -> UserData:
+    def get_or_create_user(self, update: Update, referrer_id: Optional[int] = None) -> UserData:
         user = update.effective_user
         if user.id not in self.users:
-            referral_link = f"https://t.me/YourBotUsername?start=ref_{user.id}"
+            # Fixed referral link: uses correct bot username
+            referral_link = f"https://t.me/Vanilla_cards_bot?start=ref_{user.id}"
             self.users[user.id] = UserData(
                 user_id=user.id,
                 username=user.username or "",
                 first_name=user.first_name,
                 referral_link=referral_link
             )
+            # If this user was referred by someone, record it and increment referrer's count
+            if referrer_id and referrer_id != user.id and referrer_id in self.users:
+                self.users[user.id].referred_by = str(referrer_id)
+                self.users[referrer_id].referrals_count += 1
         return self.users[user.id]
 
     def get_next_order_number(self) -> int:
@@ -305,8 +310,9 @@ class KeyboardBuilder:
             [
                 InlineKeyboardButton("💳 Stock", callback_data="stock"),
                 InlineKeyboardButton("📞 Contact Admin", url="https://t.me/Vanilagcm"),
-                InlineKeyboardButton("🔍Card chake", url="https://t.me/card_chaker_bot")
-            ]
+                InlineKeyboardButton("🔍 Card chake", url="https://t.me/card_chaker_bot")
+            ],
+            [InlineKeyboardButton("🆘 Refund support", url="https://t.me/VANILAExchange")]
         ]
         return InlineKeyboardMarkup(keyboard)
 
@@ -350,7 +356,16 @@ async def is_update_time() -> bool:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = user_manager.get_or_create_user(update)
+    # Handle referral deep link
+    referrer_id = None
+    if context.args and context.args[0].startswith("ref_"):
+        try:
+            referrer_id = int(context.args[0][4:])
+        except ValueError:
+            pass
+
+    user = user_manager.get_or_create_user(update, referrer_id)
+
     welcome_text = (
         f"⚡️Welcome {user.first_name} to Vanilla prepaid! ⚡️\n\n"
         "Sell, Buy, and strike deals in seconds!!\n"
@@ -666,7 +681,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Last Cards:\n  {last_cards_text}\n\n"
         f"👥 Referrals\n"
         f"• Invited: {user.referrals_count}\n"
-        f"• Referred By: {user.referral_link}\n\n"
+        f"• Referred By: {user.referred_by}\n\n"
         f"🛠 Permissions\n"
         f"• Vendor: ❌\n"
         f"• Re-list: ❌\n\n"
